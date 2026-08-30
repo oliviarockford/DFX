@@ -1,0 +1,39 @@
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <future>
+#include <iostream>
+#include <numeric>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+static constexpr int FS=12000;
+static constexpr double BASE_FREQ=900.0;
+static constexpr int INFO_BITS=96, RAW_BITS=112, BASE_CODED_BITS=236, TAIL=6, G0=0171, G1=0133;
+static const double PI=std::acos(-1.0);
+static const std::vector<int> SYNC={0,7,1,6,2,5,3,4,7,2,6,0,5,1,4,3,0,6,2,7,1,5,3,4};
+static const std::vector<int> PILOT={0,3,7,4,1,6,2,5};
+static const std::string CALL_CHARS=" 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ/";
+struct Profile{std::string name;int id;double baud,spacing;int repeat;};
+static const std::array<Profile,4> PROFILES={{{"FAST",0,40,40,1},{"DX",1,25,25,2},{"WEAK",2,12.5,12.5,0},{"DEEP",3,12.5,12.5,3}}};
+struct DecodeResult{bool ok=false;std::string message,profile;int sync=0,timing=0,index=0;double center=0,drift=0,metric=0;};
+static inline int parity(unsigned x){unsigned c=0;while(x){c^=(x&1u);x>>=1u;}return int(c);}
+uint16_t crc16(const std::vector<uint8_t>&d){uint16_t c=0xFFFF;for(uint8_t b:d){c^=uint16_t(b)<<8;for(int i=0;i<8;i++)c=(c&0x8000)?uint16_t((c<<1)^0x1021):uint16_t(c<<1);}return c;}
+uint64_t b2i(const std::vector<int>&b,int s,int n){uint64_t v=0;for(int i=0;i<n;i++)v=(v<<1)|b[s+i];return v;}
+std::vector<uint8_t>b2bytes(const std::vector<int>&bits,int n){int total=((n+7)/8)*8;std::vector<int>t(bits.begin(),bits.begin()+std::min<int>(n,bits.size()));t.resize(total);std::vector<uint8_t>o(total/8);for(int i=0;i<total;i++)o[i/8]=uint8_t((o[i/8]<<1)|t[i]);return o;}
+std::string dcall(uint64_t v){std::string o(6,' ');auto B=CALL_CHARS.size();for(int i=5;i>=0;i--){o[i]=CALL_CHARS[v%B];v/=B;}auto p=o.find_first_not_of(' ');return p==std::string::npos?"":o.substr(p);}
+std::string dgrid(uint64_t v){int d=v%10;v/=10;int c=v%10;v/=10;int b=v%18;v/=18;int a=v%18;std::string s;s+=char('A'+a);s+=char('A'+b);s+=char('0'+c);s+=char('0'+d);return s;}
+std::string unpack(const std::vector<int>&b){int t=b2i(b,0,3);auto c1=dcall(b2i(b,3,32)),c2=dcall(b2i(b,35,32));int a=b2i(b,67,16);if(t==0)return "CQ "+c1+" "+dgrid(a);if(t==1)return c1+" "+c2+" "+dgrid(a);if(t==2){int r=a-50;return c1+" "+c2+" "+(r>=0?"+":"")+std::to_string(r);}if(t==3){int r=a-50;return c1+" "+c2+" R"+(r>=0?"+":"")+std::to_string(r);}if(t==4)return c1+" "+c2+" RR73";if(t==5)return c1+" "+c2+" 73";throw std::runtime_error("type");}
+struct Trellis{int next[64][2]{};std::array<int,2>out[64][2]{};Trellis(){for(int s=0;s<64;s++)for(int b=0;b<2;b++){int r=((s<<1)|b)&127;next[s][b]=r&63;out[s][b]={parity(r&G0),parity(r&G1)};}}};
+std::vector<int>vit(const std::vector<double>&L){static Trellis tr;int steps=L.size()/2;const double INF=1e100;std::vector<double>m(64,INF),nm(64,INF);m[0]=0;std::vector<std::array<uint8_t,64>>ps(steps),pb(steps);for(int t=0;t<steps;t++){std::fill(nm.begin(),nm.end(),INF);double l0=L[2*t],l1=L[2*t+1];for(int s=0;s<64;s++){if(m[s]>=INF/2)continue;for(int b=0;b<2;b++){int ns=tr.next[s][b],o0=tr.out[s][b][0],o1=tr.out[s][b][1];double cost=(o0==0?std::max(0.0,-l0):std::max(0.0,l0))+(o1==0?std::max(0.0,-l1):std::max(0.0,l1));double z=m[s]+cost;if(z<nm[ns]){nm[ns]=z;ps[t][ns]=s;pb[t][ns]=b;}}}m.swap(nm);}int st=0;std::vector<int>d(steps);for(int t=steps-1;t>=0;t--){d[t]=pb[t][st];st=ps[t][st];}if((int)d.size()>=TAIL)d.resize(d.size()-TAIL);return d;}
+static constexpr int QC_Z=14,QC_KB=8,QC_MB=16,QC_N=336;
+static const int QC_A[QC_MB][QC_KB]={{12,6,-1,-1,-1,13,-1,2},{9,-1,-1,3,6,-1,2,-1},{8,-1,0,-1,-1,-1,8,0},{-1,-1,9,7,-1,0,-1,0},{-1,4,8,-1,2,10,-1,-1},{2,-1,6,-1,11,-1,-1,5},{13,-1,9,2,-1,5,-1,-1},{1,8,-1,11,-1,-1,-1,8},{-1,3,-1,0,-1,-1,10,9},{-1,4,4,-1,7,-1,11,-1},{1,3,-1,-1,8,-1,7,-1},{-1,-1,-1,-1,2,6,0,8},{-1,1,-1,8,-1,-1,13,2},{-1,-1,8,-1,-1,6,13,0},{-1,5,-1,7,13,-1,8,-1},{-1,-1,10,12,9,4,-1,-1}};
+inline int qri(int i,int sh){return (i+sh)%QC_Z;}
+std::vector<int> qcenc(const std::vector<int>&raw){std::array<std::array<int,QC_Z>,QC_MB>s{};for(int r=0;r<QC_MB;r++)for(int c=0;c<QC_KB;c++){int sh=QC_A[r][c];if(sh<0)continue;for(int i=0;i<QC_Z;i++)s[r][i]^=raw[c*QC_Z+qri(i,sh)];}std::array<std::array<int,QC_Z>,QC_MB>p{};for(int r=0;r<QC_MB;r++)for(int i=0;i<QC_Z;i++)p[r][i]=s[r][i]^((r>0)?p[r-1][i]:0);std::vector<int>cw=raw;for(int r=0;r<QC_MB;r++)for(int i=0;i<QC_Z;i++)cw.push_back(p[r][i]);return cw;}
+std::vector<int> qcdec(const std::vector<double>&ch){static const std::vector<std::vector<int>>C=[]{std::vector<std::vector<int>>c(QC_MB*QC_Z);for(int r=0;r<QC_MB;r++)for(int i=0;i<QC_Z;i++){int row=r*QC_Z+i;for(int b=0;b<QC_KB;b++){int sh=QC_A[r][b];if(sh>=0)c[row].push_back(b*QC_Z+qri(i,sh));}c[row].push_back((QC_KB+r)*QC_Z+i);if(r>0)c[row].push_back((QC_KB+r-1)*QC_Z+i);}return c;}();std::vector<double>L=ch;std::vector<std::vector<double>>R(C.size());for(size_t m=0;m<C.size();m++)R[m].assign(C[m].size(),0);std::vector<int>h(QC_N);for(int it=0;it<50;it++){for(size_t m=0;m<C.size();m++){auto&v=C[m];auto&r=R[m];int d=v.size(),sg=1,ix=-1;double m1=1e99,m2=1e99;std::vector<double>Q(d);for(int e=0;e<d;e++){Q[e]=L[v[e]]-r[e];if(Q[e]<0)sg=-sg;double a=std::abs(Q[e]);if(a<m1){m2=m1;m1=a;ix=e;}else if(a<m2)m2=a;}for(int e=0;e<d;e++){double nr=.78*sg*(Q[e]<0?-1:1)*(e==ix?m2:m1);L[v[e]]=Q[e]+nr;r[e]=nr;}}for(int i=0;i<QC_N;i++)h[i]=L[i]<0;bool ok=true;for(size_t m=0;m<C.size()&&ok;m++){int x=0;for(int v:C[m])x^=h[v];if(x)ok=false;}if(ok)return std::vector<int>(h.begin(),h.begin()+112);}return std::vector<int>(h.begin(),h.begin()+112);}
+std::vector<double>readwav(const std::string&path){std::ifstream f(path,std::ios::binary);if(!f)throw std::runtime_error("open");char r[4],w[4];uint32_t z;f.read(r,4);f.read((char*)&z,4);f.read(w,4);uint16_t fmt=0,ch=0,bits=0;uint32_t rate=0;std::vector<int16_t>pcm;while(f){char idc[4];uint32_t sz=0;f.read(idc,4);if(!f)break;f.read((char*)&sz,4);std::string id(idc,4);if(id=="fmt "){f.read((char*)&fmt,2);f.read((char*)&ch,2);f.read((char*)&rate,4);f.seekg(6,std::ios::cur);f.read((char*)&bits,2);if(sz>16)f.seekg(sz-16,std::ios::cur);}else if(id=="data"){pcm.resize(sz/2);f.read((char*)pcm.data(),sz);}else f.seekg(sz,std::ios::cur);}if(fmt!=1||ch!=1||bits!=16||rate!=FS)throw std::runtime_error("wav");std::vector<double>x(pcm.size());for(size_t i=0;i<pcm.size();i++)x[i]=pcm[i]/32768.0;return x;}
+double goertzel(const std::vector<double>&x,int st,int n,double f){double w=2*PI*f/FS,c=2*cos(w),q0=0,q1=0,q2=0;int e=std::min<int>(st+n,x.size());for(int i=st;i<e;i++){q0=c*q1-q2+x[i];q2=q1;q1=q0;}return std::max(0.0,q1*q1+q2*q2-c*q1*q2);}
+void symbol_powers(const std::vector<double>&x,const Profile&p,double center,double drift,int timing,std::vector<int>&sy,std::vector<std::array<double,8>>&pw){int sps=int(FS/p.baud);sy.clear();pw.clear();
