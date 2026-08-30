@@ -1,0 +1,41 @@
+    for(int pos=timing;pos+sps<=(int)x.size();pos+=sps){
+        double t=(pos+sps*.5)/FS;std::array<double,8>a{};int best=0;
+        for(int s=0;s<8;s++){
+            a[s]=goertzel(x,pos,sps,BASE_FREQ+s*p.spacing+center+drift*t);
+            if(a[s]>a[best])best=s;
+        }
+        sy.push_back(best);pw.push_back(a);
+    }
+}
+
+int match_at(const std::vector<int>&sy,const std::vector<int>&pat,int start){
+    if(start<0||start+(int)pat.size()>(int)sy.size())return -1;
+    int sc=0;for(size_t i=0;i<pat.size();i++)sc+=sy[start+i]==pat[i];
+    return sc;
+}
+
+struct Layout{int pilot1_start=0,pilot2_start=0,total_symbols=0,data_symbols=0;};
+int data_symbols_count(const Profile&p){int bits=(p.name=="WEAK")?(16+QC_N):(16+BASE_CODED_BITS*p.repeat);bits+=(3-(bits%3))%3;return bits/3;}
+Layout layout(const Profile&p){
+    int data=data_symbols_count(p),half=data/2;Layout L;L.pilot1_start=int(SYNC.size())+half;L.pilot2_start=int(SYNC.size())+half+int(PILOT.size())+(data-half);L.total_symbols=int(SYNC.size())+data+2*int(PILOT.size());L.data_symbols=data;return L;
+}
+struct FreqPoint{double t=0,res=0,w=0;};
+std::vector<FreqPoint> known_region_points(const std::vector<double>&x,const Profile&p,int timing,int symbolStart,const std::vector<int>&pattern,double center,double drift){
+    int sps=int(FS/p.baud);std::vector<FreqPoint>pts;const double step=0.5;
+    for(size_t k=0;k<pattern.size();k++){
+        int pos=timing+(symbolStart+int(k))*sps;if(pos+sps>(int)x.size())break;double t=(pos+sps*.5)/FS;double predicted=BASE_FREQ+pattern[k]*p.spacing+center+drift*t;double bestP=-1,bestDf=0;
+        for(double df=-5;df<=5.0001;df+=step){double q=goertzel(x,pos,sps,predicted+df);if(q>bestP){bestP=q;bestDf=df;}}
+        double refinedDf=bestDf;
+        if(bestDf>-5+step/2 && bestDf<5-step/2){double ym=std::log(goertzel(x,pos,sps,predicted+bestDf-step)+1e-30);double y0=std::log(goertzel(x,pos,sps,predicted+bestDf)+1e-30);double yp=std::log(goertzel(x,pos,sps,predicted+bestDf+step)+1e-30);double den=(ym-2*y0+yp);if(std::abs(den)>1e-12){double delta=0.5*(ym-yp)/den;delta=std::max(-1.0,std::min(1.0,delta));refinedDf=bestDf+delta*step;}}
+        pts.push_back({t,refinedDf,std::max(bestP,1e-12)});
+    }
+    return pts;
+}
+std::pair<double,double> weighted_line_fit(const std::vector<FreqPoint>&pts){double S=0,St=0,Stt=0,Sy=0,Sty=0;for(auto&p:pts){S+=p.w;St+=p.w*p.t;Stt+=p.w*p.t*p.t;Sy+=p.w*p.res;Sty+=p.w*p.t*p.res;}double det=S*Stt-St*St;if(std::abs(det)<1e-12)return{0,0};return{(Sy*Stt-St*Sty)/det,(S*Sty-St*Sy)/det};}
+double residual_rmse(const std::vector<FreqPoint>&pts,double a,double b){double e=0,w=0;for(auto&p:pts){double r=p.res-(a+b*p.t);e+=p.w*r*r;w+=p.w;}return std::sqrt(e/(w+1e-12));}
+std::vector<double> candidates(const std::vector<double>&x,const Profile&p){std::vector<std::pair<double,double>>raw;int n=std::min<int>(x.size(),FS*2);for(double c=-500;c<=500;c+=20){double m=0;for(int s=0;s<8;s++)m+=goertzel(x,0,n,BASE_FREQ+s*p.spacing+c);raw.push_back({m,c});}std::sort(raw.begin(),raw.end(),[](auto&a,auto&b){return a.first>b.first;});std::vector<double>o;for(auto&m:raw){bool near=false;for(double c:o)if(std::abs(c-m.second)<60)near=true;if(!near)o.push_back(m.second);if(o.size()>=10)break;}return o;}
+std::vector<double>llrs(const std::vector<std::array<double,8>>&pws,const Profile*pp=nullptr){std::vector<double>o;for(auto p:pws){if(pp && (pp->name=="WEAK" || pp->name=="DEEP")){for(int bp=2;bp>=0;bp--){double z=-1e99,q=-1e99;for(int s=0;s<8;s++){double lp=std::log(p[s]+1e-30);if(((s>>bp)&1)==0)z=std::max(z,lp);else q=std::max(q,lp);}o.push_back((z-q)*2.5);}}else{double sc=*std::max_element(p.begin(),p.end())+1e-12;for(double&v:p)v/=sc;for(int bp=2;bp>=0;bp--){double z=-1e99,q=-1e99;for(int s=0;s<8;s++){if(((s>>bp)&1)==0)z=std::max(z,p[s]);else q=std::max(q,p[s]);}o.push_back((z-q)*10);}}}return o;}
+std::vector<std::array<double,8>> strip_pilots(const std::vector<std::array<double,8>>&pw,int idx,const Profile&p){auto L=layout(p);int dataStart=idx+int(SYNC.size());int p1=idx+L.pilot1_start,p2=idx+L.pilot2_start;std::vector<std::array<double,8>>data;for(int i=dataStart;i<p1&&i<(int)pw.size();i++)data.push_back(pw[i]);for(int i=p1+int(PILOT.size());i<p2&&i<(int)pw.size();i++)data.push_back(pw[i]);return data;}
+std::string decode_payload(const std::vector<std::array<double,8>>&dataPw,const Profile&p){auto L=llrs(dataPw,&p);if((int)L.size()<16)throw std::runtime_error("short");int b0=std::accumulate(L.begin(),L.begin()+8,0.0)>=0?0:1,b1=std::accumulate(L.begin()+8,L.begin()+16,0.0)>=0?0:1;if(((b0<<1)|b1)!=p.id)throw std::runtime_error("head");if(p.name=="WEAK"){if((int)L.size()<16+QC_N)throw std::runtime_error("qc short");std::vector<double>ch(QC_N);for(int i=0;i<QC_N;i++)ch[i]=L[16+i];auto raw=qcdec(ch);std::vector<int>info(raw.begin(),raw.begin()+INFO_BITS);if(crc16(b2bytes(info,INFO_BITS))!=uint16_t(b2i(raw,INFO_BITS,16)))throw std::runtime_error("crc");return unpack(info);}int need=BASE_CODED_BITS*p.repeat;std::vector<double>coded;for(int i=0;i<need;i+=p.repeat){double q=0;for(int r=0;r<p.repeat;r++)q+=L[16+i+r];coded.push_back(q);}auto raw=vit(coded);std::vector<int>info(raw.begin(),raw.begin()+INFO_BITS);if(crc16(b2bytes(info,INFO_BITS))!=uint16_t(b2i(raw,INFO_BITS,16)))throw std::runtime_error("crc");return unpack(info);}
+double known_symbol_ml_score(const std::vector<double>&x,const Profile&p,int timing,int frameIndex,double center,double drift){int sps=int(FS/p.baud);auto L=layout(p);struct Region { int start; const std::vector<int>* pat; };std::array<Region,3> regions = {{{frameIndex, &SYNC},{frameIndex+L.pilot1_start, &PILOT},{frameIndex+L.pilot2_start, &PILOT}}};double score=0.0,norm=0.0;for(auto &R:regions){for(size_t k=0;k<R.pat->size();k++){int pos=timing+(R.start+int(k))*sps;if(pos+sps>(int)x.size())continue;double t=(pos+sps*0.5)/FS;int tone=(*(R.pat))[k];double f=BASE_FREQ+tone*p.spacing+center+drift*t;double e=goertzel(x,pos,sps,f);double side=0.5*(goertzel(x,pos,sps,f-p.spacing)+goertzel(x,pos,sps,f+p.spacing))+1e-12;score += std::log((e+1e-12)/side);norm += 1.0;}}return norm>0 ? score/norm : -1e99;}
+void joint_ml_refine(const std::vector<double>&x,const Profile&p,int frameIndex,int &timing,double &center,double &drift){int sps=int(FS/p.baud);double bestC=center,bestD=drift;int bestT=timing;double best=-1e99;
