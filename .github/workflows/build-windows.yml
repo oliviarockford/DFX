@@ -1,0 +1,66 @@
+name: Build Windows DFX
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reassemble native decoder source
+        shell: pwsh
+        run: |
+          Get-Content decoder_part1.txt,decoder_part2.txt,decoder_part3_1.txt,decoder_part3_2.txt,decoder_part3_3.txt,decoder_part4.txt | Set-Content -Encoding utf8 dfx_decode.cpp
+
+      - name: Enable MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build native decoder
+        shell: cmd
+        run: cl /nologo /O2 /EHsc /std:c++17 dfx_decode.cpp /Fe:dfx_decode.exe
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Protocol and decoder self-test
+        shell: pwsh
+        run: python selftest.py
+
+      - name: Build single-file DFX.exe
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed --name DFX --add-binary "dfx_decode.exe;." --hidden-import sounddevice --hidden-import serial --collect-all sounddevice DFX.py
+
+      - name: Verify executable exists
+        shell: pwsh
+        run: |
+          if (!(Test-Path dist/DFX.exe)) { throw 'DFX.exe was not created' }
+          Get-Item dist/DFX.exe | Format-List Name,Length,LastWriteTime
+
+      - name: Upload DFX.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: DFX-Windows-x64
+          path: dist/DFX.exe
+          if-no-files-found: error
+          compression-level: 0
