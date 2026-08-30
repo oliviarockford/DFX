@@ -1,0 +1,19 @@
+{
+  "mode": "DFX",
+  "version": "0.50",
+  "sample_rate": 12000,
+  "base_frequency_hz": 900,
+  "modulation": "continuous-phase 8-FSK",
+  "sync_symbols": 24,
+  "pilot_symbols": 8,
+  "frame": "SYNC -> data half -> PILOT -> data half -> PILOT",
+  "profiles": {
+    "FAST": {"id": 0,"baud": 40,"spacing_hz": 40,"slot_s": 5,"frame_s": 3.1,"fec": "K=7 convolutional 171/133, rate 1/2"},
+    "DX": {"id": 1,"baud": 25,"spacing_hz": 25,"slot_s": 10,"frame_s": 8.12,"fec": "K=7 convolutional 171/133, coded repetition x2"},
+    "WEAK": {"id": 2,"baud": 12.5,"spacing_hz": 12.5,"slot_s": 15,"frame_s": 12.64,"fec": "QC-LDPC k=112 n=336, layered normalized min-sum"},
+    "DEEP": {"id": 3,"baud": 12.5,"spacing_hz": 12.5,"slot_s": 30,"frame_s": 22.56,"fec": "K=7 convolutional 171/133, coded repetition x3"}
+  },
+  "adaptive_thresholds_db_snr2500": {"FAST_to_DX": -24.2,"DX_to_FAST": -22.2,"DX_to_WEAK": -29.4,"WEAK_to_DX": -27.4,"WEAK_to_DEEP": -35.8,"DEEP_to_WEAK": -33.8},
+  "acceptance": "CRC16 final frame acceptance; FAST/DX pilot patterns are estimators, not rejection gates",
+  "status": "experimental; controlled-AWGN calibrated; on-air validation required"
+}
