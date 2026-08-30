@@ -3,6 +3,19 @@ from pathlib import Path
 
 LINE_RE=re.compile(r"^(FAST|DX|WEAK|DEEP)\s+\|\s+([\-0-9.eE]+)\s+Hz\s+\|\s+drift\s+([\-0-9.eE]+)\s+\|\s+score\s+([\-0-9.eE]+)\s+\|\s+sync\s+(\d+)\s+\|\s+(.+)$")
 
+
+def _hidden_subprocess_kwargs():
+    """Prevent dfx_decode.exe from flashing a console window on Windows."""
+    if os.name != "nt":
+        return {}
+    kwargs={"creationflags": getattr(subprocess,"CREATE_NO_WINDOW",0)}
+    si=subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0
+    kwargs["startupinfo"]=si
+    return kwargs
+
+
 class NativeDecoder:
     def __init__(self,appdir=None):
         frozen_dir=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))
@@ -26,7 +39,7 @@ class NativeDecoder:
             out=[]
             for profile in profiles:
                 try:
-                    r=subprocess.run([str(self.exe),profile,str(p)],capture_output=True,text=True,timeout=timeout)
+                    r=subprocess.run([str(self.exe),profile,str(p)],capture_output=True,text=True,timeout=timeout,**_hidden_subprocess_kwargs())
                 except subprocess.TimeoutExpired:
                     continue
                 for line in r.stdout.splitlines():
