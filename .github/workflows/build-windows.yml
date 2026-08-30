@@ -60,18 +60,20 @@ jobs:
       - name: Upload DFX.exe artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DFX-Windows-x64
+          name: DFX-Windows-x64-v0.51
           path: dist/DFX.exe
           if-no-files-found: error
           compression-level: 0
 
-      - name: Publish GitHub Release v0.50
+      - name: Publish GitHub Release v0.51
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.50
-          name: DFX v0.50
+          tag_name: v0.51
+          name: DFX v0.51
           body: |
-            DFX v0.50 experimental adaptive weak-signal amateur-radio transceiver for Windows x64.
+            DFX v0.51 experimental adaptive weak-signal amateur-radio transceiver for Windows x64.
+
+            Fix: native decoder subprocesses are now launched invisibly on Windows, so the repeated black console windows no longer flash during RX decoding.
 
             Download DFX.exe and run it directly. No Python installation is required.
 
