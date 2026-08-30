@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -57,10 +57,27 @@ jobs:
           if (!(Test-Path dist/DFX.exe)) { throw 'DFX.exe was not created' }
           Get-Item dist/DFX.exe | Format-List Name,Length,LastWriteTime
 
-      - name: Upload DFX.exe
+      - name: Upload DFX.exe artifact
         uses: actions/upload-artifact@v4
         with:
           name: DFX-Windows-x64
           path: dist/DFX.exe
           if-no-files-found: error
           compression-level: 0
+
+      - name: Publish GitHub Release v0.50
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.50
+          name: DFX v0.50
+          body: |
+            DFX v0.50 experimental adaptive weak-signal amateur-radio transceiver for Windows x64.
+
+            Download DFX.exe and run it directly. No Python installation is required.
+
+            Profiles: FAST, DX, WEAK and DEEP.
+
+            This is an experimental release intended for laboratory and first on-air testing.
+          files: dist/DFX.exe
+          draft: false
+          prerelease: true
